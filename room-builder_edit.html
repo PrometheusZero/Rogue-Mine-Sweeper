@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+		
+		<title>Room Builder</title>
+		<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+		<style type="text/css">
+            body {
+                margin:0
+            } 
+			#app {
+				height:1280px;
+				width:1280px;
+			}
+			.cell {
+				width: 18px;
+				height: 18px;
+				border: 1px solid #888888;
+				position: absolute;
+				text-align: center;
+				line-height: 0 auto;
+			}
+			.void {
+				background-color: #000000;
+			}
+			.wall {
+				background-color: #888888;
+			}
+			.floor {
+				background-color: #DDDDDD;
+			}
+        </style>
+		
+    </head>
+    <body>
+
+		<div id="app"></div>
+        
+        <script
+			src="https://code.jquery.com/jquery-3.3.1.slim.js"
+			integrity="sha256-fNXJFIlca05BIO2Y5zh1xrShK3ME+/lYZ0j+ChxX2DA="
+			crossorigin="anonymous">
+		</script>
+		<script type="text/javascript">
+
+            var Dungeon = {
+                map: [],
+                map_size: 64,
+				min_roomCount:10,
+				max_roomCount:20,
+				room_count:10,
+				min_roomSize:5,
+				max_roomSize:15,
+				player:{up:"&#8657;",down:"&#8659;",left:"&#8656;",right:"&#8658;"},
+                rooms: [],
+                //INITIALISE MAP 2-D ARRAY (map_size x map_size)
+				Init: function(){				
+					for (let x=0; x<this.map_size; x++){
+                        this.map[x] = [];
+                        for(let y=0; y<this.map_size; y++){
+                            this.map[x][y] = {key:"void",subkey:"",item:"",flag:0};
+                        }
+                    }
+				},				
+				//GENERATE BASE ROOMS
+				InitRooms: function(){									
+                    this.room_count = Helpers.GetRandom(this.min_roomCount, this.max_roomCount);
+                    let min_size = this.min_roomSize;
+                    let max_size = this.max_roomSize;
+					let errorCount = 0;
+                    for (let i = 0; i < this.room_count; i++) {
+                        errorCount++;
+						if(errorCount > 10000){	//this is so crowded dungeons don't trigger infinate loop.
+							console.log("Error Count > 10000. Terminating program.")
+							return;	
+						}
+						let room = {};
+						room.w = Helpers.GetRandom(min_size, max_size);
+						room.h = Helpers.GetRandom(min_size, max_size);
+						room.x = Helpers.GetRandom(1, this.map_size - room.w - 1);
+						room.y = Helpers.GetRandom(1, this.map_size - room.h - 1);
+                        
+						if (this.DoesCollide(room)) {	//check for collision - if so, step back and re-generate.
+                            i--;
+                            continue;
+                        }						
+                        //shrink room width and height - allow for walls inside container
+						room.w--;
+                        room.h--;
+
+						this.rooms.push(room);
+                    }
+					
+					//iterate over all rooms, denote their insides in the 2-D array
+					for (let i=0; i<this.room_count; i++) {
+                        let room = this.rooms[i];
+                        for (let x=room.x; x<room.x+room.w; x++) {
+                            for (let y=room.y; y<room.y+room.h; y++) {
+                                this.map[x][y].key = "floor";
+								this.map[x][y].subkey = "room";
+                            }
+                        }
+                    }
+				},
+				//GENERATE CORRIDORS
+				InitCorridors: function(){
+					//each room will have 1 corridor coming from it
+					for (let i = 0; i < this.room_count; i++) {
+						let roomA = this.rooms[i];
+						let roomB = this.FindClosestRoom(roomA);
+                        this.MakeCorridors(roomA, roomB);
+                    }
+					//add in (min_roomCount/2) extra corridors between random rooms to avoid isolated pairs of rooms
+					for(let i=0;i<this.min_roomCount/2;i++){
+						let roomA = this.rooms[Math.floor(Math.random()*this.rooms.length)];
+						let roomB = this.rooms[Math.floor(Math.random()*this.rooms.length)];
+						this.MakeCorridors(roomA,roomB);
+					}
+				},
+				//CREATE WALLS
+				InitWalls: function(){
+					//iterate over 2-D array - find edges to the floor and mark them wall.
+                    for (var x = 0; x < this.map_size; x++) {
+                        for (var y = 0; y < this.map_size; y++) {
+                            if (this.map[x][y].key == "floor") {
+                                for (var xx = x - 1; xx <= x + 1; xx++) {
+                                    for (var yy = y - 1; yy <= y + 1; yy++) {
+                                        if (this.map[xx][yy].key == "void"){
+											this.map[xx][yy].key = "wall";
+										}
+                                    }
+                                }
+                            }
+                        }
+                    }
+					//iterate over 2-D array, find walls that are "in a room" and remove them
+					for(let x=0;x<this.map_size;x++){
+						for(let y=0;y<this.map_size;y++){
+							if(this.map[x][y].key == "wall"){
+								if(!(x == 0 || x == (this.map_size - 1)) && !(y == 0 || y == (this.map_size - 1))){	
+									if((this.map[x-1][y].key == "floor" && this.map[x+1][y].key == "floor") || (this.map[x][y-1].key == "floor" && this.map[x][y+1].key == "floor")){
+										this.map[x][y].key = "floor";
+									}
+								}
+							}
+						}
+					}
+                },
+				//TRACE CORRIDOR FROM ROOM-A TO ROOM-B
+				MakeCorridors(roomA, roomB){
+					//pick a random point within roomA
+					pointA = {
+						x: Helpers.GetRandom(roomA.x, roomA.x + roomA.w),
+						y: Helpers.GetRandom(roomA.y, roomA.y + roomA.h)
+					};
+					//pick a random point within roomB
+					pointB = {
+						x: Helpers.GetRandom(roomB.x, roomB.x + roomB.w),
+						y: Helpers.GetRandom(roomB.y, roomB.y + roomB.h)
+					};
+					//flips 50/50 between: routing x then y AND routing y then x.
+					if(Math.random() < 0.5){
+						//while pointA and pointB are in different locations
+						while ((pointB.x != pointA.x) || (pointB.y != pointA.y)) {
+							if(pointB.x != pointA.x){	//always move pointB towards pointA
+								if (pointB.x > pointA.x){
+									pointB.x--;
+								}else{
+									pointB.x++;
+								}
+							}else if(pointB.y != pointA.y){
+								if(pointB.y > pointA.y){
+									pointB.y--;
+								}else{
+									pointB.y++;
+								}
+							}
+							//mark this point on the map as '1' in the 2-D array.
+							this.map[pointB.x][pointB.y].key = "floor";
+							this.map[pointB.x][pointB.y].subkey = "corridor";
+						}
+					//50/50 flip, y then x
+					}else{
+						//while pointA and pointB are in different locations
+						while ((pointB.x != pointA.x) || (pointB.y != pointA.y)) {
+							if(pointB.y != pointA.y){ //always move pointB towards pointA								
+								if(pointB.y > pointA.y){
+									pointB.y--;
+								}else{
+									pointB.y++;
+								}
+							}else if(pointB.x != pointA.x){
+								if (pointB.x > pointA.x){
+									pointB.x--;
+								}else{
+									pointB.x++;
+								}
+							}
+							//mark this point on the map as '1' in the 2-D array.
+							this.map[pointB.x][pointB.y].key = "floor";
+							this.map[pointB.x][pointB.y].subkey = "corridor";
+						}
+					}
+				},
+				//ITERATE THROUGH ALL ROOMS, FIND ONE THATS CLOSEST PASSED VARIABLE
+				FindClosestRoom: function (room) {
+					var mid = {
+                        x: room.x + (room.w / 2),
+                        y: room.y + (room.h / 2)
+                    };
+                    //initialise
+					var closest = null;
+                    var closest_distance = 1000;
+                    //iterate over array of all rooms
+					for (var i = 0; i < this.rooms.length; i++) {
+						var check = this.rooms[i];
+						if (check == room) continue;
+						var check_mid = {
+                            x: check.x + (check.w / 2),
+                            y: check.y + (check.h / 2)
+                        };
+                        //pythag
+						var distance = Math.min(Math.abs(mid.x - check_mid.x) - (room.w / 2) - (check.w / 2), Math.abs(mid.y - check_mid.y) - (room.h / 2) - (check.h / 2));
+						if (distance < closest_distance) {
+                            closest_distance = distance;
+                            closest = check;
+                        }
+                    }
+					return closest;
+                },
+				//CHECK IF 4 CORNERS OF ANY ROOM ARE INSIDE THIS ONE.
+				DoesCollide: function (room, ignore) {
+                    //iterate over all rooms
+					for (var i = 0; i < this.rooms.length; i++) {
+                        //if looked at room is same as compare room then skip
+						if (i == ignore) continue;
+                        //shorthand assign
+						var check = this.rooms[i];
+                        //check no corner of any room is inside this room
+						if (!((room.x + room.w < check.x) || (room.x > check.x + check.w) || (room.y + room.h < check.y) || (room.y > check.y + check.h))) return true;
+                    }
+                    return false;
+                },			
+				//PLACE MINES ON FLOOR
+				PlaceMines: function(){
+					for(let x=0;x<this.map_size;x++){
+						for(let y=0;y<this.map_size;y++){
+							if(this.map[x][y].key == "floor"){
+								if(Math.random() < 0.02){
+									this.map[x][y].item = "mine";
+								}
+							}
+						}
+					}
+				},
+				DetermineFlags: function(){
+					for(let x=1;x<this.map_size-1;x++){
+						for(let y=1;y<this.map_size-1;y++){
+							let count = 0;
+							for(let xx = x-1; xx <= x+1; xx++){
+								for(let yy = y-1; yy <= y+1; yy++){
+									if(this.map[xx][yy].item == "mine"){
+										count++;
+									}
+								}
+							}
+							if(this.map[x][y].item != "mine" && this.map[x][y].key != "wall"){
+								this.map[x][y].flag = count;
+							}
+						}
+					}
+				}
+			}
+			
+			var Render = {
+				Cells: function(){
+					let appCode = "";	//Look at doing this iteratively, adding to the DOM bit by bit instead of building a massive string and forcing it on the DOM
+					for(let x=0;x<Dungeon.map_size;x++){
+						for(let y=0;y<Dungeon.map_size;y++){
+							let typeKey = Dungeon.map[x][y].key;
+
+							appCode += '<div id="' + x + '_' + y + '" class="cell ' + typeKey + '" style="top:' + x*20 + 'px; left:' + y*20 + 'px;"></div>';
+						}
+					}
+					document.getElementById('app').innerHTML = appCode;
+				},
+				Mines: function(){
+					for(let x=0;x<Dungeon.map_size;x++){
+						for(let y=0;y<Dungeon.map_size;y++){
+							if(Dungeon.map[x][y].flag > 0){
+								$('#' + x + '_' + y).html('<span class="flag">' + Dungeon.map[x][y].flag + '</span>');
+							}
+						}
+					}
+				}
+			}
+
+            var Helpers = {
+                GetRandom: function (low, high) {
+                    return~~ (Math.random() * (high - low)) + low;
+                }
+            };			
+
+
+            Dungeon.Init();
+			Dungeon.InitRooms();
+			Dungeon.InitCorridors();
+			Dungeon.InitWalls();
+			Dungeon.PlaceMines();
+			Dungeon.DetermineFlags();
+			
+			Render.Cells();
+			Render.Mines();
+    </script>
+</body>
+</html>
